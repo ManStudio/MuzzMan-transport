@@ -33,21 +33,32 @@ impl TModule for ModuleMuzzManTransport {
                 true,
                 "The buffer size with will recive or send file",
             ),
-        )
-    }
+        );
 
-    fn init_element_settings(&self, data: &mut Data) {
         data.add(
-            "port",
+            "relays",
             Value::new(
-                Type::U16(2121),
-                vec![TypeTag::U16],
+                Type::Vec(vec![Type::String("w.konkito.com".into())]),
+                vec![TypeTag::Vec(Box::new(TypeTag::String))],
                 vec![],
                 true,
-                "The port that will recive",
+                "Relays to find clients",
             ),
         );
 
+        data.add(
+            "name",
+            Value::new(
+                Type::String(whoami::username()),
+                vec![TypeTag::String],
+                vec![],
+                true,
+                "The name of the client",
+            ),
+        );
+    }
+
+    fn init_element_settings(&self, data: &mut Data) {
         data.add(
             "url",
             Value::new(
@@ -113,11 +124,12 @@ impl TModule for ModuleMuzzManTransport {
                     return;
                 }
 
-                let port;
                 let buffer_size;
                 let path;
                 let secret;
                 let should;
+                let mut relays = vec![];
+                let name;
 
                 {
                     let element = element.read().unwrap();
@@ -133,14 +145,6 @@ impl TModule for ModuleMuzzManTransport {
                         FileOrData::Bytes(_) => {
                             return;
                         }
-                    }
-
-                    let Some(data) = element.element_data.get("port")else{return}; // in posibile
-                                                                                   // because validation
-                    if let Type::U16(p) = data {
-                        port = *p;
-                    } else {
-                        return; // in posibile because validation
                     }
 
                     let Some(data) = element.module_data.get("buffer_size")else{return}; // in posibile
@@ -175,9 +179,32 @@ impl TModule for ModuleMuzzManTransport {
                     } else {
                         return; // in posibile because validation
                     }
+
+                    let Some(data) = element.module_data.get("relays")else{return};
+
+                    if let Type::Vec(data) = data {
+                        for element in data {
+                            if let Type::String(element) = element {
+                                relays.push(element.clone())
+                            }
+                        }
+                    }
+
+                    if relays.len() == 0 {
+                        error(&info, "module_data has no relays");
+                        return;
+                    }
+
+                    let Some(data) = element.module_data.get("name")else{return};
+
+                    if let Type::String(data) = data {
+                        name = data.clone();
+                    } else {
+                        return;
+                    }
                 }
 
-                let Some(mut manager) = UdpManager::new(port, buffer_size, path, should, secret, info.clone())else{error(&info, "Error: cannot bind on port!");return;};
+                let Some(mut manager) = UdpManager::new( buffer_size, path, should, secret, relays, name, info.clone())else{error(&info, "Error: cannot bind on port!");return;};
 
                 {
                     let element = element.read().unwrap();

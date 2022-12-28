@@ -59,7 +59,7 @@ impl PakStorage {
 
             let mut bytes = pak.0.to_bytes();
             bytes.reverse();
-            let _ = conn.send_to(&bytes, &connection.conn);
+            // let _ = conn.send_to(&bytes, &connection.conn);
             pak.1 = SystemTime::now();
 
             not_recv += 1;

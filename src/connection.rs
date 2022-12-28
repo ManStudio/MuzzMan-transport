@@ -1,10 +1,11 @@
 use std::time::SystemTime;
 
-use socket2::SockAddr;
+use socket2::{SockAddr, Socket};
 
 pub struct Connection {
     pub name: String,
-    pub conn: SockAddr,
+    pub conn: Socket,
+    pub sock_addr: SockAddr,
     pub packets: Vec<u16>,
     pub recv_packets: Vec<u16>,
     pub pak_cour: u8,
