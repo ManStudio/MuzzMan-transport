@@ -66,6 +66,9 @@ impl UdpManager {
             relays,
         ) else{ return None};
 
+        let code = hex::encode(relay.info.public.clone());
+        println!("Code: {code}");
+
         let mut buffer = Vec::with_capacity(buffer_size);
         buffer.resize(buffer_size, MaybeUninit::new(0));
 
@@ -94,6 +97,7 @@ impl UdpManager {
         let segments = url.split('/').collect::<Vec<&str>>();
         let addr = segments[2];
         let adress = hex::decode(addr).unwrap();
+        println!("Connect To: {:?}", adress);
         let secret = segments[3].to_string();
         let mut path = String::new();
         for (i, s) in segments[4..].iter().enumerate() {
@@ -103,10 +107,12 @@ impl UdpManager {
             path.push_str(s);
         }
 
-        self.relay.search(Search {
-            client: relay_man::common::packets::SearchType::Exact("muzzman-transport".into()),
-            ..Default::default()
-        });
+        self.relay
+            .search(Search {
+                client: relay_man::common::packets::SearchType::Exact("muzzman-transport".into()),
+                ..Default::default()
+            })
+            .get();
 
         let where_is;
         if let Some(is) = self.relay.where_is_adress(&adress).iter().next() {
@@ -122,7 +128,15 @@ impl UdpManager {
             .request(&adress, String::new())
             .get();
         res.add_port(rand::thread_rng().gen_range(1025..u16::MAX));
-        let socket = res.accept(true).get().connect();
+        let req = res.accept(true).get();
+        let from_adress = req.adress.clone();
+        let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(())};
+        let Some(addr) = addr.next() else {return Err(())};
+
+        let sock_addr = addr.into();
+        let Ok(socket) =
+                req.connect(Duration::from_secs(2), Duration::from_secs(1), false) else {return Err(())};
+        println!("Connected");
 
         let pak = Packet {
             id: 0,
@@ -138,8 +152,45 @@ impl UdpManager {
 
         let mut b = pak.to_bytes();
         b.reverse();
+        socket.send(&b).unwrap();
 
-        socket.send(&b);
+        self.connecting = Some(thread::spawn(move || {
+            let mut buffer = [MaybeUninit::new(0); 1024];
+            loop {
+                if let Ok(len) = socket.recv(&mut buffer) {
+                    let bytes = buffer[0..len].to_owned();
+                    let mut bytes = unsafe { std::mem::transmute(bytes) };
+
+                    if let Some(packet) = Packet::from_bytes(&mut bytes) {
+                        println!("Packet: {:?}", packet);
+                        if let Packets::AuthResponse(res) = packet.packet {
+                            if res.accepted {
+                                println!("Connection succesful");
+                                let connection = Connection {
+                                    name: "Server".into(),
+                                    conn: socket,
+                                    sock_addr,
+                                    packets: vec![0; 32],
+                                    recv_packets: vec![0; 64],
+                                    pak_cour: 0,
+                                    coursor: 0,
+                                    session: res.session,
+                                    active: true,
+                                    last_action: SystemTime::now(),
+                                    content_length: 0,
+                                };
+                                return Ok(connection);
+                            } else {
+                                println!("Connection Refuzed");
+                                return Err(());
+                            }
+                        }
+                    } else {
+                        return Err(());
+                    }
+                }
+            }
+        }));
 
         println!("Packet sent");
         Ok(())
@@ -148,6 +199,21 @@ impl UdpManager {
     pub fn step(&mut self) {
         self.relay.step();
 
+        if let Some(conn) = self.connecting.take() {
+            if conn.is_finished() {
+                match conn.join().unwrap() {
+                    Ok(mut conn) => {
+                        println!("Connected");
+                        conn.last_action = SystemTime::now();
+                        self.connections.push(conn);
+                    }
+                    Err(_) => println!("Connecting failed"),
+                }
+            } else {
+                self.connecting = Some(conn)
+            }
+        }
+
         if self.connecting.is_none() {
             match self.should {
                 Should::Send => {
@@ -155,7 +221,7 @@ impl UdpManager {
                         match req {
                             relay_man::client::response::RequestStage::NewRequest(req) => {
                                 if let Some(info) = req.connection.info(&req.from).get() {
-                                    if info.other == "muzzman-transport".to_string().to_bytes() {
+                                    if info.client == "muzzman-transport".to_string() {
                                         req.accept(true);
                                     } else {
                                         req.accept(false);
@@ -180,122 +246,133 @@ impl UdpManager {
 
                                     let sock_addr = addr.into();
 
-                                    let socket = req.connect();
-                                    socket.set_nonblocking(false).unwrap();
+                                    let Ok(socket) = req.connect(
+                                        Duration::from_secs(2),
+                                        Duration::from_secs(1),
+                                        true,
+                                    ) else{
+                                        println!("Cannot connect");
+                                        return Err(())
+                                    };
 
                                     let mut buffer = [MaybeUninit::new(0); 1024];
 
-                                    if let Ok(len) = socket.recv(&mut buffer) {
-                                        let bytes = buffer[0..len].to_owned();
-                                        let mut bytes = unsafe { std::mem::transmute(bytes) };
+                                    loop {
+                                        if let Ok(len) = socket.recv(&mut buffer) {
+                                            let bytes = buffer[0..len].to_owned();
+                                            let mut bytes = unsafe { std::mem::transmute(bytes) };
 
-                                        if let Some(packet) = Packet::from_bytes(&mut bytes) {
-                                            match packet.packet {
-                                                crate::packets::Packets::Auth(auth) => {
-                                                    println!("Auth part: {}, path: {}, secret: {}, name: {}",auth.path, path, auth.secret, auth.name);
-                                                    if auth.path != path || auth.secret != secret {
-                                                        let mut pak = Packet {
-                                                            id: 2,
+                                            if let Some(packet) = Packet::from_bytes(&mut bytes) {
+                                                match packet.packet {
+                                                    crate::packets::Packets::Auth(auth) => {
+                                                        println!("Auth part: {}, path: {}, secret: {}, name: {}",auth.path, path, auth.secret, auth.name);
+                                                        if auth.path != path
+                                                            || auth.secret != secret
+                                                        {
+                                                            let mut pak = Packet {
+                                                                id: 2,
+                                                                packets: vec![0; 32],
+                                                                packet: Packets::AuthResponse(
+                                                                    AuthResponse {
+                                                                        accepted: false,
+                                                                        session: 0,
+                                                                    },
+                                                                ),
+                                                            };
+
+                                                            pak.packets[0] = packet.id;
+
+                                                            let mut bytes = pak.to_bytes();
+                                                            bytes.reverse();
+
+                                                            let _ = socket.send(&bytes);
+                                                            return Err(());
+                                                        }
+
+                                                        let session = random();
+
+                                                        let mut connection = Connection {
+                                                            name: auth.name,
+                                                            conn: socket,
                                                             packets: vec![0; 32],
-                                                            packet: Packets::AuthResponse(
-                                                                AuthResponse {
-                                                                    accepted: false,
-                                                                    session: 0,
-                                                                },
-                                                            ),
+                                                            recv_packets: vec![0; 64],
+                                                            coursor: 0,
+                                                            session,
+                                                            active: true,
+                                                            last_action: SystemTime::now(),
+                                                            content_length: 0,
+                                                            pak_cour: 0,
+                                                            sock_addr,
                                                         };
 
-                                                        pak.packets[0] = packet.id;
+                                                        connection.add_id(packet.id);
+                                                        connection.add_packets(&packet.packets);
 
-                                                        let mut bytes = pak.to_bytes();
-                                                        bytes.reverse();
+                                                        let pak = AuthResponse {
+                                                            accepted: true,
+                                                            session,
+                                                        };
 
-                                                        let _ = socket.send(&bytes);
-                                                        return Err(());
+                                                        let len;
+                                                        {
+                                                            let mut ford = info.get_data().unwrap();
+                                                            let current = ford
+                                                                .seek(std::io::SeekFrom::Current(0))
+                                                                .unwrap();
+                                                            len = ford
+                                                                .seek(std::io::SeekFrom::End(0))
+                                                                .unwrap();
+                                                            let _ = ford.seek(
+                                                                std::io::SeekFrom::Start(current),
+                                                            );
+                                                        }
+
+                                                        connection.content_length = len as u128;
+
+                                                        let pak = Packet {
+                                                            id: 2,
+                                                            packets: connection.packets.clone(),
+                                                            packet: Packets::AuthResponse(pak),
+                                                        };
+
+                                                        let mut b = pak.to_bytes();
+                                                        b.reverse();
+
+                                                        let _ = connection.conn.send(&b);
+
+                                                        let pak = Headers {
+                                                            session,
+                                                            content_length: len as u128,
+                                                            others: HashMap::new(),
+                                                        };
+
+                                                        connection.content_length =
+                                                            pak.content_length;
+
+                                                        let pak = Packet {
+                                                            id: 3,
+                                                            packets: connection.packets.clone(),
+                                                            packet: Packets::Headers(pak),
+                                                        };
+
+                                                        let mut b = pak.to_bytes();
+                                                        b.reverse();
+
+                                                        let _ = connection.conn.send(&b);
+
+                                                        return Ok(connection);
+                                                        // self.messages.push(Message::New(
+                                                        //     connection.name.clone(),
+                                                        //     connection.session,
+                                                        //     connection.sock_addr,
+                                                        // ));
+                                                        // self.connections.push(connection);
                                                     }
-
-                                                    let session = random();
-
-                                                    let mut connection = Connection {
-                                                        name: auth.name,
-                                                        conn: socket,
-                                                        packets: vec![0; 32],
-                                                        recv_packets: vec![0; 64],
-                                                        coursor: 0,
-                                                        session,
-                                                        active: true,
-                                                        last_action: SystemTime::now(),
-                                                        content_length: 0,
-                                                        pak_cour: 0,
-                                                        sock_addr,
-                                                    };
-
-                                                    connection.add_id(packet.id);
-                                                    connection.add_packets(&packet.packets);
-
-                                                    let pak = AuthResponse {
-                                                        accepted: true,
-                                                        session,
-                                                    };
-
-                                                    let len;
-                                                    {
-                                                        let mut ford = info.get_data().unwrap();
-                                                        let current = ford
-                                                            .seek(std::io::SeekFrom::Current(0))
-                                                            .unwrap();
-                                                        len = ford
-                                                            .seek(std::io::SeekFrom::End(0))
-                                                            .unwrap();
-                                                        let _ = ford.seek(
-                                                            std::io::SeekFrom::Start(current),
-                                                        );
-                                                    }
-
-                                                    connection.content_length = len as u128;
-
-                                                    let pak = Packet {
-                                                        id: 2,
-                                                        packets: connection.packets.clone(),
-                                                        packet: Packets::AuthResponse(pak),
-                                                    };
-
-                                                    let mut b = pak.to_bytes();
-                                                    b.reverse();
-
-                                                    let _ = connection.conn.send(&b);
-
-                                                    let pak = Headers {
-                                                        session,
-                                                        content_length: len as u128,
-                                                        others: HashMap::new(),
-                                                    };
-
-                                                    connection.content_length = pak.content_length;
-
-                                                    let pak = Packet {
-                                                        id: 3,
-                                                        packets: connection.packets.clone(),
-                                                        packet: Packets::Headers(pak),
-                                                    };
-
-                                                    let mut b = pak.to_bytes();
-                                                    b.reverse();
-
-                                                    let _ = connection.conn.send(&b);
-                                                    // self.messages.push(Message::New(
-                                                    //     connection.name.clone(),
-                                                    //     connection.session,
-                                                    //     connection.sock_addr,
-                                                    // ));
-                                                    // self.connections.push(connection);
+                                                    _ => {}
                                                 }
-                                                _ => {}
                                             }
                                         }
                                     }
-
-                                    Err(())
                                 }));
                             }
                             _ => {}

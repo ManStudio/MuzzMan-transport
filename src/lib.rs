@@ -38,7 +38,10 @@ impl TModule for ModuleMuzzManTransport {
         data.add(
             "relays",
             Value::new(
-                Type::Vec(vec![Type::String("w.konkito.com".into())]),
+                Type::Vec(vec![
+                    // Type::String("w.konkito.com".into()),
+                    Type::String("localhost".into()),
+                ]),
                 vec![TypeTag::Vec(Box::new(TypeTag::String))],
                 vec![],
                 true,
@@ -210,7 +213,7 @@ impl TModule for ModuleMuzzManTransport {
                     let element = element.read().unwrap();
                     if let Some(data) = element.element_data.get("url") {
                         if let Type::String(url) = data {
-                            manager.send_request(url.clone());
+                            manager.send_request(url.clone()).unwrap();
                         }
                     }
                 }
