@@ -20,7 +20,6 @@ use crate::{
     connection::Connection,
     mesage::Message,
     packets::{Auth, AuthResponse, FileContent, Headers, Packet, Packets},
-    pak_storage::PakStorage,
 };
 
 pub enum Should {
@@ -36,11 +35,9 @@ pub struct UdpManager {
     path: String,
     secret: String,
     should: Should,
-    counter: u128,
     buffer_size: usize,
     info: EInfo,
     pub messages: Vec<Message>,
-    pak_storage: PakStorage,
     name: String,
     connecting: Option<JoinHandle<Result<Connection, ()>>>,
 }
@@ -72,9 +69,6 @@ impl UdpManager {
         let mut buffer = Vec::with_capacity(buffer_size);
         buffer.resize(buffer_size, MaybeUninit::new(0));
 
-        // conn.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-        // conn.set_nonblocking(true).unwrap();
-
         Some(Self {
             connections: Vec::new(),
             buffer,
@@ -83,10 +77,8 @@ impl UdpManager {
             secret,
             should,
             path,
-            counter: 1,
             info,
             messages: Vec::new(),
-            pak_storage: Default::default(),
             name,
             relay,
             connecting: None,
@@ -166,19 +158,8 @@ impl UdpManager {
                         if let Packets::AuthResponse(res) = packet.packet {
                             if res.accepted {
                                 println!("Connection succesful");
-                                let connection = Connection {
-                                    name: "Server".into(),
-                                    conn: socket,
-                                    sock_addr,
-                                    packets: vec![0; 32],
-                                    recv_packets: vec![0; 64],
-                                    pak_cour: 0,
-                                    coursor: 0,
-                                    session: res.session,
-                                    active: true,
-                                    last_action: SystemTime::now(),
-                                    content_length: 0,
-                                };
+                                let connection =
+                                    Connection::new("Server", socket, sock_addr, res.session);
                                 return Ok(connection);
                             } else {
                                 println!("Connection Refuzed");
@@ -291,19 +272,9 @@ impl UdpManager {
 
                                                         let session = random();
 
-                                                        let mut connection = Connection {
-                                                            name: auth.name,
-                                                            conn: socket,
-                                                            packets: vec![0; 32],
-                                                            recv_packets: vec![0; 64],
-                                                            coursor: 0,
-                                                            session,
-                                                            active: true,
-                                                            last_action: SystemTime::now(),
-                                                            content_length: 0,
-                                                            pak_cour: 0,
-                                                            sock_addr,
-                                                        };
+                                                        let mut connection = Connection::new(
+                                                            auth.name, socket, sock_addr, session,
+                                                        );
 
                                                         connection.add_id(packet.id);
                                                         connection.add_packets(&packet.packets);
@@ -329,16 +300,7 @@ impl UdpManager {
 
                                                         connection.content_length = len as u128;
 
-                                                        let pak = Packet {
-                                                            id: 2,
-                                                            packets: connection.packets.clone(),
-                                                            packet: Packets::AuthResponse(pak),
-                                                        };
-
-                                                        let mut b = pak.to_bytes();
-                                                        b.reverse();
-
-                                                        let _ = connection.conn.send(&b);
+                                                        let _ = connection.send(pak.into());
 
                                                         let pak = Headers {
                                                             session,
@@ -349,16 +311,7 @@ impl UdpManager {
                                                         connection.content_length =
                                                             pak.content_length;
 
-                                                        let pak = Packet {
-                                                            id: 3,
-                                                            packets: connection.packets.clone(),
-                                                            packet: Packets::Headers(pak),
-                                                        };
-
-                                                        let mut b = pak.to_bytes();
-                                                        b.reverse();
-
-                                                        let _ = connection.conn.send(&b);
+                                                        let _ = connection.send(pak.into());
 
                                                         return Ok(connection);
                                                         // self.messages.push(Message::New(
@@ -384,44 +337,16 @@ impl UdpManager {
         }
 
         for connection in self.connections.iter_mut() {
+            if connection.resolv() > 31 {
+                continue;
+            }
+
             if let Ok(size) = connection.conn.recv(&mut self.buffer) {
                 let bytes = self.buffer[0..size].to_owned();
                 let mut bytes = unsafe { std::mem::transmute(bytes) };
 
                 if let Some(packet) = Packet::from_bytes(&mut bytes) {
                     match packet.packet {
-                        crate::packets::Packets::AuthResponse(res) => {
-                            // TODO: To implement if only requested
-                            // WARING!
-
-                            println!("Auth response recived: {}", res.accepted);
-
-                            if res.accepted {
-                                match self.should {
-                                    Should::Recv | Should::Sync => {
-                                        // let session = self.counter;
-                                        // let mut connection = Connection {
-                                        //     name: "Some conn".to_string(),
-                                        //     conn: from,
-                                        //     packets: vec![0; 32],
-                                        //     recv_packets: vec![0; 64],
-                                        //     coursor: 0,
-                                        //     session: res.session,
-                                        //     active: true,
-                                        //     last_action: SystemTime::now(),
-                                        //     content_length: 0,
-                                        //     pak_cour: 0,
-                                        // };
-
-                                        // connection.add_id(packet.id);
-                                        // connection.add_packets(&packet.packets);
-
-                                        // self.connections.push(connection);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
                         crate::packets::Packets::Headers(headers) => match self.should {
                             Should::Sync | Should::Recv => {
                                 println!("Recived headers: {}", headers.content_length);
@@ -530,13 +455,13 @@ impl UdpManager {
                 continue;
             }
 
-            // if self.pak_storage.resolv(&mut self.conn, conn) > 31 {
-            //     continue;
-            // }
+            if conn.resolv() > 31 {
+                continue;
+            }
 
             match self.should {
                 Should::Send => {
-                    let mut pak = Packet {
+                    let pak = Packet {
                         id: 0,
                         packets: conn.packets.clone(),
                         packet: Packets::FileContent(FileContent {
@@ -553,7 +478,7 @@ impl UdpManager {
                     let _ = ford.seek(std::io::SeekFrom::Start(conn.coursor as u64));
                     let readed = ford.read(&mut buffer).unwrap();
 
-                    pak.packet = if readed == 0 {
+                    let pak = if readed == 0 {
                         self.messages.push(Message::Destroy(conn.session));
                         Packets::Finished(conn.session)
                     } else {
@@ -569,6 +494,7 @@ impl UdpManager {
                     };
                     conn.coursor += readed as u128;
 
+                    conn.send(pak)
                     // self.pak_storage.send(&mut self.conn, pak, &conn.conn);
                 }
                 Should::Recv => {}

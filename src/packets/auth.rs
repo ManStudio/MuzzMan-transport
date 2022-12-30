@@ -1,5 +1,7 @@
 use bytes_kman::prelude::*;
 
+use super::Packets;
+
 #[derive(Bytes, Debug, PartialEq, Clone)]
 pub struct Auth {
     pub name: String,
@@ -54,5 +56,17 @@ mod test {
         let other = Packet::from_bytes(&mut b).unwrap();
 
         assert_eq!(pak, other)
+    }
+}
+
+impl Into<Packets> for Auth {
+    fn into(self) -> Packets {
+        Packets::Auth(self)
+    }
+}
+
+impl Into<Packets> for AuthResponse {
+    fn into(self) -> Packets {
+        Packets::AuthResponse(self)
     }
 }

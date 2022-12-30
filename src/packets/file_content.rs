@@ -1,5 +1,7 @@
 use bytes_kman::prelude::*;
 
+use super::Packets;
+
 #[derive(Bytes, Debug, PartialEq, Clone)]
 pub struct FileContent {
     pub session: u128,
@@ -49,5 +51,11 @@ mod test {
         let other = Packet::from_bytes(&mut bytes).unwrap();
 
         assert_eq!(pak, other);
+    }
+}
+
+impl Into<Packets> for FileContent {
+    fn into(self) -> Packets {
+        Packets::FileContent(self)
     }
 }

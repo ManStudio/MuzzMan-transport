@@ -1,6 +1,12 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
+use bytes_kman::TBytes;
 use socket2::{SockAddr, Socket};
+
+use crate::{
+    packets::{Packet, Packets},
+    pak_storage::PakStorage,
+};
 
 pub struct Connection {
     pub name: String,
@@ -14,9 +20,29 @@ pub struct Connection {
     pub active: bool,
     pub last_action: SystemTime,
     pub content_length: u128,
+    pub storage: PakStorage,
 }
 
+// #[allow(unconditional_panic)]
+
 impl Connection {
+    pub fn new(name: impl Into<String>, conn: Socket, sock_addr: SockAddr, session: u128) -> Self {
+        Self {
+            name: name.into(),
+            conn,
+            sock_addr,
+            packets: vec![0; 32],
+            recv_packets: vec![0; 64],
+            pak_cour: 0,
+            coursor: 0,
+            session,
+            active: true,
+            last_action: SystemTime::now(),
+            content_length: 0,
+            storage: PakStorage::default(),
+        }
+    }
+
     pub fn add_id(&mut self, id: u16) {
         self.packets[self.pak_cour as usize] = id;
         self.pak_cour = (self.pak_cour + 1) % 32;
@@ -53,5 +79,49 @@ impl Connection {
                 self.recv_packets[pos] = *pak;
             }
         }
+    }
+
+    pub fn resolv(&mut self) -> usize {
+        let mut not_recv = 0;
+        self.storage.packets.retain_mut(|pak| {
+            if self.recv_packets.contains(&pak.0.id) {
+                return false;
+            }
+
+            if pak.1.elapsed().unwrap() < Duration::from_secs(1) {
+                return true;
+            }
+
+            let mut bytes = pak.0.to_bytes();
+            bytes.reverse();
+            // let _ = conn.send_to(&bytes, &connection.conn);
+            pak.1 = SystemTime::now();
+
+            not_recv += 1;
+
+            true
+        });
+        not_recv
+    }
+
+    pub fn send(&mut self, pak: Packets) {
+        if self.storage.counter == 0 {
+            self.storage.counter = 1;
+        }
+
+        let mut pak = Packet {
+            id: self.storage.counter,
+            packets: self.packets.clone(),
+            packet: pak,
+        };
+
+        self.storage.counter = self.storage.counter.wrapping_add(1);
+
+        let mut b = pak.to_bytes();
+        b.reverse();
+
+        self.storage.packets.push((pak, SystemTime::now()));
+
+        let _ = self.conn.send(&b);
     }
 }
