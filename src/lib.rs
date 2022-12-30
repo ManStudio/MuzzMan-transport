@@ -101,6 +101,17 @@ impl TModule for ModuleMuzzManTransport {
                 "Should upload,download or sync",
             ),
         );
+
+        data.add(
+            "share",
+            Value::new(
+                Type::String(String::new()),
+                vec![TypeTag::String],
+                vec![],
+                false,
+                "This you need to send to your friend to be able to download",
+            ),
+        );
     }
 
     fn init_element(&self, element: ERow) {
@@ -207,7 +218,21 @@ impl TModule for ModuleMuzzManTransport {
                     }
                 }
 
-                let Some(mut manager) = UdpManager::new( buffer_size, path, should, secret, relays, name, info.clone())else{error(&info, "Error: cannot bind on port!");return;};
+                let mut manager = match UdpManager::new(
+                    buffer_size,
+                    path,
+                    should,
+                    secret,
+                    relays,
+                    name,
+                    info.clone(),
+                ) {
+                    Ok(manager) => manager,
+                    Err(err) => {
+                        error(&info, err);
+                        return;
+                    }
+                };
 
                 {
                     let element = element.read().unwrap();
@@ -219,10 +244,13 @@ impl TModule for ModuleMuzzManTransport {
                 }
 
                 storage.set(manager);
+                storage.set(Vec::<u128>::new());
 
                 element.set_status(1);
             }
             1 => {
+                let Some(sessions) = storage.get::<Vec<u128>>() else {return};
+                let mut sessions = sessions.clone();
                 let Some(manager) = storage.get_mut::<UdpManager>()else{element.set_status(0); return;};
                 manager.step();
 
@@ -257,6 +285,7 @@ impl TModule for ModuleMuzzManTransport {
                                 ),
                             );
                             element.set_element_data(data).unwrap();
+                            sessions.push(session);
                         }
                         mesage::Message::SetProgress(session, progress) => {
                             let location_info = info.read().unwrap().location.clone();
@@ -274,7 +303,23 @@ impl TModule for ModuleMuzzManTransport {
                                 }
                             }
                         }
-                        mesage::Message::SetStatus(_, _) => todo!(),
+                        mesage::Message::SetStatus(session, status) => {
+                            let location_info = info.read().unwrap().location.clone();
+                            let len = location_info.get_elements_len().unwrap();
+                            let elements = location_info.get_elements(0..len).unwrap();
+
+                            for element in elements {
+                                let data = element.get_element_data().unwrap();
+                                if let Some(data) = data.get("session") {
+                                    if let Type::U128(s) = data {
+                                        if *s == session {
+                                            let _ = element.set_status(0);
+                                            let _ = element.set_statuses(vec![status.clone()]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         mesage::Message::Destroy(session) => {
                             let location_info = info.read().unwrap().location.clone();
                             let len = location_info.get_elements_len().unwrap();
@@ -296,9 +341,45 @@ impl TModule for ModuleMuzzManTransport {
                             if let Some(finded) = finded {
                                 finded.destroy().unwrap();
                             }
+
+                            sessions.retain(|s| *s != session);
+                        }
+                        mesage::Message::SetShare(share) => {
+                            if let Ok(mut data) = info.get_element_data() {
+                                data.set("share", Type::String(share));
+                                let _ = info.set_element_data(data);
+                            }
+                        }
+                        mesage::Message::Error(msg) => {
+                            let location_info = info.read().unwrap().location.clone();
+                            let len = location_info.get_elements_len().unwrap();
+                            let elements = location_info.get_elements(0..len).unwrap();
+
+                            let mut finded = Vec::new();
+
+                            for element in elements {
+                                let data = element.get_element_data().unwrap();
+                                if let Some(data) = data.get("session") {
+                                    if let Type::U128(s) = data {
+                                        if sessions.contains(s) {
+                                            finded.push(element.clone())
+                                        }
+                                    }
+                                }
+                            }
+
+                            for finded in finded {
+                                finded.destroy().unwrap();
+                            }
+
+                            sessions.clear();
+                            error(&info, msg);
+                            return;
                         }
                     }
                 }
+
+                storage.set(sessions);
             }
 
             4 | 5 => {

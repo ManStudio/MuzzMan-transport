@@ -39,7 +39,17 @@ pub struct UdpManager {
     info: EInfo,
     pub messages: Vec<Message>,
     name: String,
-    connecting: Option<JoinHandle<Result<Connection, ()>>>,
+    connecting: Option<JoinHandle<Result<Connection, ConnectingError>>>,
+}
+
+#[derive(Debug)]
+pub enum ConnectingError {
+    FailOnConnect,
+    InvalidAuth,
+    AuthFailed,
+    DomainAdressCannotBeFound,
+    InvalidPacket,
+    InvalidFilePath,
 }
 
 impl UdpManager {
@@ -51,8 +61,8 @@ impl UdpManager {
         relays: Vec<String>,
         name: String,
         info: EInfo,
-    ) -> Option<Self> {
-        let Ok(relay) = RelayClient::new(
+    ) -> Result<Self, String> {
+        let relay = RelayClient::new(
             ConnectionInfo {
                 client: "muzzman-transport".into(),
                 name: name.clone(),
@@ -61,15 +71,27 @@ impl UdpManager {
                 privacy: false,
             },
             relays,
-        ) else{ return None};
+        );
+        let relay = match relay {
+            Ok(relay) => relay,
+            Err(err) => {
+                return Err(format!("{:?}", err));
+            }
+        };
 
         let code = hex::encode(relay.info.public.clone());
-        println!("Code: {code}");
 
         let mut buffer = Vec::with_capacity(buffer_size);
         buffer.resize(buffer_size, MaybeUninit::new(0));
 
-        Some(Self {
+        let messages = vec![Message::SetShare(format!(
+            "mzt://{}/{}/{}",
+            hex::encode(relay.info.public.clone()),
+            secret.clone(),
+            path.clone()
+        ))];
+
+        Ok(Self {
             connections: Vec::new(),
             buffer,
             // conn,
@@ -78,7 +100,7 @@ impl UdpManager {
             should,
             path,
             info,
-            messages: Vec::new(),
+            messages,
             name,
             relay,
             connecting: None,
@@ -89,7 +111,6 @@ impl UdpManager {
         let segments = url.split('/').collect::<Vec<&str>>();
         let addr = segments[2];
         let adress = hex::decode(addr).unwrap();
-        println!("Connect To: {:?}", adress);
         let secret = segments[3].to_string();
         let mut path = String::new();
         for (i, s) in segments[4..].iter().enumerate() {
@@ -163,11 +184,11 @@ impl UdpManager {
                                 return Ok(connection);
                             } else {
                                 println!("Connection Refuzed");
-                                return Err(());
+                                return Err(ConnectingError::AuthFailed);
                             }
                         }
                     } else {
-                        return Err(());
+                        return Err(ConnectingError::InvalidPacket);
                     }
                 }
             }
@@ -186,9 +207,24 @@ impl UdpManager {
                     Ok(mut conn) => {
                         println!("Connected");
                         conn.last_action = SystemTime::now();
+                        self.messages.push(Message::New(
+                            conn.name.clone(),
+                            conn.session,
+                            conn.sock_addr.clone(),
+                        ));
                         self.connections.push(conn);
                     }
-                    Err(_) => println!("Connecting failed"),
+                    Err(err) => match err {
+                        ConnectingError::InvalidFilePath => self
+                            .messages
+                            .push(Message::Error("Invalid file path!".into())),
+                        ConnectingError::AuthFailed => self
+                            .messages
+                            .push(Message::Error("Invalid secret or path!".into())),
+                        _ => {
+                            println!("Connecting Error: {:?}", err);
+                        }
+                    },
                 }
             } else {
                 self.connecting = Some(conn)
@@ -222,8 +258,8 @@ impl UdpManager {
                                 let info = self.info.clone();
                                 self.connecting = Some(thread::spawn(move || {
                                     let from_adress = req.adress.clone();
-                                    let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(())};
-                                    let Some(addr) = addr.next() else {return Err(())};
+                                    let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(ConnectingError::DomainAdressCannotBeFound)};
+                                    let Some(addr) = addr.next() else {return Err(ConnectingError::DomainAdressCannotBeFound)};
 
                                     let sock_addr = addr.into();
 
@@ -233,7 +269,7 @@ impl UdpManager {
                                         true,
                                     ) else{
                                         println!("Cannot connect");
-                                        return Err(())
+                                        return Err(ConnectingError::FailOnConnect)
                                     };
 
                                     let mut buffer = [MaybeUninit::new(0); 1024];
@@ -267,7 +303,9 @@ impl UdpManager {
                                                             bytes.reverse();
 
                                                             let _ = socket.send(&bytes);
-                                                            return Err(());
+                                                            return Err(
+                                                                ConnectingError::InvalidAuth,
+                                                            );
                                                         }
 
                                                         let session = random();
@@ -287,9 +325,22 @@ impl UdpManager {
                                                         let len;
                                                         {
                                                             let mut ford = info.get_data().unwrap();
-                                                            let current = ford
+                                                            let current = match ford
                                                                 .seek(std::io::SeekFrom::Current(0))
-                                                                .unwrap();
+                                                            {
+                                                                Ok(e) => e,
+                                                                Err(_) => {
+                                                                    let _ = connection.send(
+                                                                        AuthResponse {
+                                                                            accepted: false,
+                                                                            session: 0,
+                                                                        }
+                                                                        .into(),
+                                                                    );
+
+                                                                    return Err(ConnectingError::InvalidFilePath);
+                                                                }
+                                                            };
                                                             len = ford
                                                                 .seek(std::io::SeekFrom::End(0))
                                                                 .unwrap();
@@ -314,12 +365,6 @@ impl UdpManager {
                                                         let _ = connection.send(pak.into());
 
                                                         return Ok(connection);
-                                                        // self.messages.push(Message::New(
-                                                        //     connection.name.clone(),
-                                                        //     connection.session,
-                                                        //     connection.sock_addr,
-                                                        // ));
-                                                        // self.connections.push(connection);
                                                     }
                                                     _ => {}
                                                 }
@@ -337,10 +382,6 @@ impl UdpManager {
         }
 
         for connection in self.connections.iter_mut() {
-            if connection.resolv() > 31 {
-                continue;
-            }
-
             if let Ok(size) = connection.conn.recv(&mut self.buffer) {
                 let bytes = self.buffer[0..size].to_owned();
                 let mut bytes = unsafe { std::mem::transmute(bytes) };
@@ -355,6 +396,9 @@ impl UdpManager {
                                 connection.add_id(packet.id);
                                 connection.add_packets(&packet.packets);
                                 connection.last_action = SystemTime::now();
+
+                                connection.send(Packets::Tick(connection.session));
+
                                 // }
                             }
                             _ => {}
@@ -391,13 +435,7 @@ impl UdpManager {
                                         ford.seek(std::io::SeekFrom::Start(content.cursor as u64));
                                     let _ = ford.write(&content.bytes).unwrap();
 
-                                    let pak = Packet {
-                                        id: 0,
-                                        packets: packets.clone(),
-                                        packet: Packets::Tick(content.session),
-                                    };
-
-                                    // self.pak_storage.send(&mut self.conn, pak, &from);
+                                    connection.send(Packets::Tick(connection.session));
 
                                     let _ = self.info.set_progress(
                                         (coursor as f64 / content_length as f64) as f32,
@@ -422,6 +460,8 @@ impl UdpManager {
                                 }
                                 _ => {}
                             }
+
+                            connection.send(Packets::Tick(connection.session));
                         }
                         crate::packets::Packets::Tick(session) => {
                             if !connection.packets.contains(&packet.id) {
