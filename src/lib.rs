@@ -39,7 +39,7 @@ impl TModule for ModuleMuzzManTransport {
             "relays",
             Value::new(
                 Type::Vec(vec![
-                    // Type::String("w.konkito.com".into()),
+                    Type::String("w.konkito.com".into()),
                     Type::String("localhost".into()),
                 ]),
                 vec![TypeTag::Vec(Box::new(TypeTag::String))],
