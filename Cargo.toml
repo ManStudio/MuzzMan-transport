@@ -22,7 +22,7 @@ crate-type = ["cdylib"]
 muzzman-lib= "0.1.0" 
 bytes-kman = {version = "0.1.7"}
 socket2 = "0.4.7"
-relay-man = "0.1.1"
+relay-man = "0.2.1"
 whoami = "1.2.3"
 rand = "0.8.5"
 hex = "0.4.3"

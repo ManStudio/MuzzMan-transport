@@ -141,13 +141,14 @@ impl UdpManager {
             .request(&adress, String::new())
             .get();
         res.add_port(rand::thread_rng().gen_range(1025..u16::MAX));
-        let req = res.accept(true).get();
-        let from_adress = req.adress.clone();
+        let req = res
+            .accept(true, Some(Duration::from_secs(5).as_nanos()))
+            .get();
         let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(())};
         let Some(addr) = addr.next() else {return Err(())};
 
         let sock_addr = addr.into();
-        let Ok(socket) =
+        let Ok(conn) =
                 req.connect(Duration::from_secs(2), Duration::from_secs(1), false) else {return Err(())};
         println!("Connected");
 
@@ -165,12 +166,12 @@ impl UdpManager {
 
         let mut b = pak.to_bytes();
         b.reverse();
-        socket.send(&b).unwrap();
+        conn.send(&b).unwrap();
 
         self.connecting = Some(thread::spawn(move || {
             let mut buffer = [MaybeUninit::new(0); 1024];
             loop {
-                if let Ok(len) = socket.recv(&mut buffer) {
+                if let Ok(len) = conn.recv(&mut buffer) {
                     let bytes = buffer[0..len].to_owned();
                     let mut bytes = unsafe { std::mem::transmute(bytes) };
 
@@ -180,7 +181,7 @@ impl UdpManager {
                             if res.accepted {
                                 println!("Connection succesful");
                                 let connection =
-                                    Connection::new("Server", socket, sock_addr, res.session);
+                                    Connection::new("Server", conn, sock_addr, res.session);
                                 return Ok(connection);
                             } else {
                                 println!("Connection Refuzed");
@@ -234,7 +235,7 @@ impl UdpManager {
         if self.connecting.is_none() {
             match self.should {
                 Should::Send => {
-                    if let Some((index, req)) = self.relay.has_new() {
+                    if let Some((_, req)) = self.relay.has_new() {
                         match req {
                             relay_man::client::response::RequestStage::NewRequest(req) => {
                                 if let Some(info) = req.connection.info(&req.from).get() {
@@ -257,7 +258,6 @@ impl UdpManager {
                                 let secret = self.secret.clone();
                                 let info = self.info.clone();
                                 self.connecting = Some(thread::spawn(move || {
-                                    let from_adress = req.adress.clone();
                                     let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(ConnectingError::DomainAdressCannotBeFound)};
                                     let Some(addr) = addr.next() else {return Err(ConnectingError::DomainAdressCannotBeFound)};
 
@@ -296,7 +296,6 @@ impl UdpManager {
                                                                     },
                                                                 ),
                                                             };
-
                                                             pak.packets[0] = packet.id;
 
                                                             let mut bytes = pak.to_bytes();

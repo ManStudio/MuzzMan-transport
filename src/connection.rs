@@ -1,7 +1,8 @@
 use std::time::{Duration, SystemTime};
 
 use bytes_kman::TBytes;
-use socket2::{SockAddr, Socket};
+use relay_man::client::response::Conn;
+use socket2::SockAddr;
 
 use crate::{
     packets::{Packet, Packets},
@@ -10,7 +11,7 @@ use crate::{
 
 pub struct Connection {
     pub name: String,
-    pub conn: Socket,
+    pub conn: Conn,
     pub sock_addr: SockAddr,
     pub packets: Vec<u16>,
     pub recv_packets: Vec<u16>,
@@ -26,7 +27,7 @@ pub struct Connection {
 // #[allow(unconditional_panic)]
 
 impl Connection {
-    pub fn new(name: impl Into<String>, conn: Socket, sock_addr: SockAddr, session: u128) -> Self {
+    pub fn new(name: impl Into<String>, conn: Conn, sock_addr: SockAddr, session: u128) -> Self {
         Self {
             name: name.into(),
             conn,
@@ -109,7 +110,7 @@ impl Connection {
             self.storage.counter = 1;
         }
 
-        let mut pak = Packet {
+        let pak = Packet {
             id: self.storage.counter,
             packets: self.packets.clone(),
             packet: pak,
