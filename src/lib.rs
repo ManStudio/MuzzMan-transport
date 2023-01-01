@@ -235,12 +235,34 @@ impl TModule for ModuleMuzzManTransport {
                 };
 
                 {
+                    println!("STart");
+                    let mut err = None;
                     let element = element.read().unwrap();
                     if let Some(data) = element.element_data.get("url") {
                         if let Type::String(url) = data {
-                            manager.send_request(url.clone()).unwrap();
+                            if manager.send_request(url.clone()).is_err() {
+                                println!("Had an error");
+                                manager.messages.reverse();
+                                while manager.messages.len() > 0 {
+                                    let message = manager.messages.pop().unwrap();
+                                    match message {
+                                        mesage::Message::Error(msg) => {
+                                            println!("{}", msg);
+                                            err = Some(msg);
+                                            return;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
                     }
+
+                    if let Some(err) = err {
+                        error(&info, &err);
+                    }
+
+                    println!("DDD");
                 }
 
                 storage.set(manager);

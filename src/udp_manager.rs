@@ -136,6 +136,8 @@ impl UdpManager {
             path.push_str(s);
         }
 
+        println!("D: {}", path);
+
         self.relay
             .search(Search {
                 client: relay_man::common::packets::SearchType::Exact("muzzman-transport".into()),
@@ -165,10 +167,32 @@ impl UdpManager {
         let Some(addr) = addr.next() else {return Err(())};
 
         let sock_addr = addr.into();
-        let Ok(conn) =
-                req.connect(Duration::from_secs(2), Duration::from_secs(1), false) else {
-            self.messages.push(Message::Error("Cannot connect! try to open 'Universal Plug an Play'(UPNP) in the router".into()));
-            return Err(())
+        let conn = match req.connect(Duration::from_secs(10), Duration::from_secs(1), false) {
+            Ok(e) => e,
+            Err(s) => {
+                match s {
+                    relay_man::client::response::ConnectOnError::CannotBind => self
+                        .messages
+                        .push(Message::Error("Connot connect! Cannot Bind!".into())),
+                    relay_man::client::response::ConnectOnError::CannotSetNonBlocking => {
+                        self.messages.push(Message::Error(
+                            "Cannot connect! CannotSetNonBlocking".into(),
+                        ))
+                    }
+                    relay_man::client::response::ConnectOnError::TimoutIsLesTheResend => {
+                        self.messages.push(Message::Error(
+                            "Cannot Connect! TimeoutIsLesTheResend".into(),
+                        ))
+                    }
+                    relay_man::client::response::ConnectOnError::StageOneFailed => self
+                        .messages
+                        .push(Message::Error("Cannot connect! StageOneFailed".into())),
+                    relay_man::client::response::ConnectOnError::StageTwoFailed => self
+                        .messages
+                        .push(Message::Error("Cannot connect! StageTowFailed".into())),
+                }
+                return Err(());
+            }
         };
         println!("Connected");
 
@@ -302,6 +326,10 @@ impl UdpManager {
                                             match packet.packet {
                                                 crate::packets::Packets::Auth(auth) => {
                                                     println!("Auth part: {}, path: {}, secret: {}, name: {}",auth.path, path, auth.secret, auth.name);
+                                                    println!(
+                                                        "MY: path: {}, secret: {}",
+                                                        path, secret
+                                                    );
                                                     if auth.path != path || auth.secret != secret {
                                                         let mut pak = Packet {
                                                             id: 2,
