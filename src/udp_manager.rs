@@ -79,16 +79,14 @@ impl UdpManager {
             }
         };
 
-        let code = hex::encode(relay.info.public.clone());
-
         let mut buffer = Vec::with_capacity(buffer_size);
         buffer.resize(buffer_size, MaybeUninit::new(0));
 
         let messages = vec![Message::SetShare(format!(
             "mzt://{}/{}/{}",
             hex::encode(relay.info.public.clone()),
-            secret.clone(),
-            path.clone()
+            secret,
+            path
         ))];
 
         Ok(Self {
@@ -109,11 +107,29 @@ impl UdpManager {
 
     pub fn send_request(&mut self, url: String) -> Result<(), ()> {
         let segments = url.split('/').collect::<Vec<&str>>();
+        if segments.len() < 5 {
+            self.messages.push(Message::Error("Invalid URL".into()));
+            return Err(());
+        }
+
+        if segments[0] != "mzt:" {
+            self.messages.push(Message::Error("Invalid URL".into()));
+            return Err(());
+        }
+
         let addr = segments[2];
-        let adress = hex::decode(addr).unwrap();
+        let Ok(adress) = hex::decode(addr) else{
+            self.messages.push(Message::Error("Invalid ADRESS format".into()));
+            return Err(())
+        };
         let secret = segments[3].to_string();
         let mut path = String::new();
         for (i, s) in segments[4..].iter().enumerate() {
+            // for windows
+            if s.contains('\\') {
+                path = s.to_string();
+                break;
+            }
             if i > 0 {
                 path.push('/');
             }
@@ -128,9 +144,10 @@ impl UdpManager {
             .get();
 
         let where_is;
-        if let Some(is) = self.relay.where_is_adress(&adress).iter().next() {
+        if let Some(is) = self.relay.where_is_adress(&adress).first() {
             where_is = *is
         } else {
+            self.messages.push(Message::Error("Invalid ADRESS!".into()));
             return Err(());
         };
 
@@ -149,7 +166,10 @@ impl UdpManager {
 
         let sock_addr = addr.into();
         let Ok(conn) =
-                req.connect(Duration::from_secs(2), Duration::from_secs(1), false) else {return Err(())};
+                req.connect(Duration::from_secs(2), Duration::from_secs(1), false) else {
+            self.messages.push(Message::Error("Cannot connect! try to open 'Universal Plug an Play'(UPNP) in the router".into()));
+            return Err(())
+        };
         println!("Connected");
 
         let pak = Packet {
@@ -233,150 +253,142 @@ impl UdpManager {
         }
 
         if self.connecting.is_none() {
-            match self.should {
-                Should::Send => {
-                    if let Some((_, req)) = self.relay.has_new() {
-                        match req {
-                            relay_man::client::response::RequestStage::NewRequest(req) => {
-                                if let Some(info) = req.connection.info(&req.from).get() {
-                                    if info.client == "muzzman-transport".to_string() {
-                                        req.accept(true);
-                                    } else {
-                                        req.accept(false);
-                                    }
+            if let Should::Send = self.should {
+                if let Some((_, req)) = self.relay.has_new() {
+                    match req {
+                        relay_man::client::response::RequestStage::NewRequest(req) => {
+                            if let Some(info) = req.connection.info(&req.from).get() {
+                                if info.client == "muzzman-transport".to_string() {
+                                    req.accept(true);
                                 } else {
                                     req.accept(false);
                                 }
+                            } else {
+                                req.accept(false);
                             }
-                            relay_man::client::response::RequestStage::NewRequestFinal(req) => {
-                                if req.accept {
-                                    req.add_port(rand::thread_rng().gen_range(1025..u16::MAX));
-                                }
+                        }
+                        relay_man::client::response::RequestStage::NewRequestFinal(req) => {
+                            if req.accept {
+                                req.add_port(rand::thread_rng().gen_range(1025..u16::MAX));
                             }
-                            relay_man::client::response::RequestStage::ConnectOn(req) => {
-                                let path = self.path.clone();
-                                let secret = self.secret.clone();
-                                let info = self.info.clone();
-                                self.connecting = Some(thread::spawn(move || {
-                                    let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(ConnectingError::DomainAdressCannotBeFound)};
-                                    let Some(addr) = addr.next() else {return Err(ConnectingError::DomainAdressCannotBeFound)};
+                        }
+                        relay_man::client::response::RequestStage::ConnectOn(req) => {
+                            let path = self.path.clone();
+                            let secret = self.secret.clone();
+                            let info = self.info.clone();
+                            self.connecting = Some(thread::spawn(move || {
+                                let Ok(mut addr) = req.to.to_socket_addrs() else{return Err(ConnectingError::DomainAdressCannotBeFound)};
+                                let Some(addr) = addr.next() else {return Err(ConnectingError::DomainAdressCannotBeFound)};
 
-                                    let sock_addr = addr.into();
+                                let sock_addr = addr.into();
 
-                                    let Ok(socket) = req.connect(
-                                        Duration::from_secs(2),
-                                        Duration::from_secs(1),
-                                        true,
-                                    ) else{
-                                        println!("Cannot connect");
-                                        return Err(ConnectingError::FailOnConnect)
-                                    };
+                                let Ok(socket) = req.connect(
+                                    Duration::from_secs(2),
+                                    Duration::from_secs(1),
+                                    true,
+                                ) else{
+                                    println!("Cannot connect");
+                                    return Err(ConnectingError::FailOnConnect)
+                                };
 
-                                    let mut buffer = [MaybeUninit::new(0); 1024];
+                                let mut buffer = [MaybeUninit::new(0); 1024];
 
-                                    loop {
-                                        if let Ok(len) = socket.recv(&mut buffer) {
-                                            let bytes = buffer[0..len].to_owned();
-                                            let mut bytes = unsafe { std::mem::transmute(bytes) };
+                                loop {
+                                    if let Ok(len) = socket.recv(&mut buffer) {
+                                        let bytes = buffer[0..len].to_owned();
+                                        let mut bytes = unsafe { std::mem::transmute(bytes) };
 
-                                            if let Some(packet) = Packet::from_bytes(&mut bytes) {
-                                                match packet.packet {
-                                                    crate::packets::Packets::Auth(auth) => {
-                                                        println!("Auth part: {}, path: {}, secret: {}, name: {}",auth.path, path, auth.secret, auth.name);
-                                                        if auth.path != path
-                                                            || auth.secret != secret
+                                        if let Some(packet) = Packet::from_bytes(&mut bytes) {
+                                            match packet.packet {
+                                                crate::packets::Packets::Auth(auth) => {
+                                                    println!("Auth part: {}, path: {}, secret: {}, name: {}",auth.path, path, auth.secret, auth.name);
+                                                    if auth.path != path || auth.secret != secret {
+                                                        let mut pak = Packet {
+                                                            id: 2,
+                                                            packets: vec![0; 32],
+                                                            packet: Packets::AuthResponse(
+                                                                AuthResponse {
+                                                                    accepted: false,
+                                                                    session: 0,
+                                                                },
+                                                            ),
+                                                        };
+                                                        pak.packets[0] = packet.id;
+
+                                                        let mut bytes = pak.to_bytes();
+                                                        bytes.reverse();
+
+                                                        let _ = socket.send(&bytes);
+                                                        return Err(ConnectingError::InvalidAuth);
+                                                    }
+
+                                                    let session = random();
+
+                                                    let mut connection = Connection::new(
+                                                        auth.name, socket, sock_addr, session,
+                                                    );
+
+                                                    connection.add_id(packet.id);
+                                                    connection.add_packets(&packet.packets);
+
+                                                    let pak = AuthResponse {
+                                                        accepted: true,
+                                                        session,
+                                                    };
+
+                                                    let len;
+                                                    {
+                                                        let mut ford = info.get_data().unwrap();
+                                                        let current = match ford
+                                                            .seek(std::io::SeekFrom::Current(0))
                                                         {
-                                                            let mut pak = Packet {
-                                                                id: 2,
-                                                                packets: vec![0; 32],
-                                                                packet: Packets::AuthResponse(
+                                                            Ok(e) => e,
+                                                            Err(_) => {
+                                                                let _ = connection.send(
                                                                     AuthResponse {
                                                                         accepted: false,
                                                                         session: 0,
-                                                                    },
-                                                                ),
-                                                            };
-                                                            pak.packets[0] = packet.id;
+                                                                    }
+                                                                    .into(),
+                                                                );
 
-                                                            let mut bytes = pak.to_bytes();
-                                                            bytes.reverse();
-
-                                                            let _ = socket.send(&bytes);
-                                                            return Err(
-                                                                ConnectingError::InvalidAuth,
-                                                            );
-                                                        }
-
-                                                        let session = random();
-
-                                                        let mut connection = Connection::new(
-                                                            auth.name, socket, sock_addr, session,
+                                                                return Err(ConnectingError::InvalidFilePath);
+                                                            }
+                                                        };
+                                                        len = ford
+                                                            .seek(std::io::SeekFrom::End(0))
+                                                            .unwrap();
+                                                        let _ = ford.seek(
+                                                            std::io::SeekFrom::Start(current),
                                                         );
-
-                                                        connection.add_id(packet.id);
-                                                        connection.add_packets(&packet.packets);
-
-                                                        let pak = AuthResponse {
-                                                            accepted: true,
-                                                            session,
-                                                        };
-
-                                                        let len;
-                                                        {
-                                                            let mut ford = info.get_data().unwrap();
-                                                            let current = match ford
-                                                                .seek(std::io::SeekFrom::Current(0))
-                                                            {
-                                                                Ok(e) => e,
-                                                                Err(_) => {
-                                                                    let _ = connection.send(
-                                                                        AuthResponse {
-                                                                            accepted: false,
-                                                                            session: 0,
-                                                                        }
-                                                                        .into(),
-                                                                    );
-
-                                                                    return Err(ConnectingError::InvalidFilePath);
-                                                                }
-                                                            };
-                                                            len = ford
-                                                                .seek(std::io::SeekFrom::End(0))
-                                                                .unwrap();
-                                                            let _ = ford.seek(
-                                                                std::io::SeekFrom::Start(current),
-                                                            );
-                                                        }
-
-                                                        connection.content_length = len as u128;
-
-                                                        let _ = connection.send(pak.into());
-
-                                                        let pak = Headers {
-                                                            session,
-                                                            content_length: len as u128,
-                                                            others: HashMap::new(),
-                                                        };
-
-                                                        connection.content_length =
-                                                            pak.content_length;
-
-                                                        let _ = connection.send(pak.into());
-
-                                                        return Ok(connection);
                                                     }
-                                                    _ => {}
+
+                                                    connection.content_length = len as u128;
+
+                                                    let _ = connection.send(pak.into());
+
+                                                    let pak = Headers {
+                                                        session,
+                                                        content_length: len as u128,
+                                                        others: HashMap::new(),
+                                                    };
+
+                                                    connection.content_length = pak.content_length;
+
+                                                    let _ = connection.send(pak.into());
+
+                                                    return Ok(connection);
                                                 }
+                                                _ => {}
                                             }
                                         }
                                     }
-                                }));
-                            }
-                            _ => {}
+                                }
+                            }));
                         }
+                        _ => {}
                     }
                 }
-                _ => {}
             }
         }
 
