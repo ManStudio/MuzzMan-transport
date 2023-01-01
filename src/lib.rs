@@ -235,28 +235,29 @@ impl TModule for ModuleMuzzManTransport {
                 };
 
                 {
-                    println!("STart");
                     let mut err = None;
-                    let element = element.read().unwrap();
-                    if let Some(data) = element.element_data.get("url") {
-                        if let Type::String(url) = data {
-                            if manager.send_request(url.clone()).is_err() {
-                                println!("Had an error");
-                                manager.messages.reverse();
-                                while manager.messages.len() > 0 {
-                                    let message = manager.messages.pop().unwrap();
-                                    match message {
-                                        mesage::Message::Error(msg) => {
-                                            println!("{}", msg);
-                                            err = Some(msg);
+                    {
+                        println!("STart");
+                        let element = element.read().unwrap();
+                        if let Some(data) = element.element_data.get("url") {
+                            if let Type::String(url) = data {
+                                if manager.send_request(url.clone()).is_err() {
+                                    println!("Had an error");
+                                    manager.messages.reverse();
+                                    while manager.messages.len() > 0 {
+                                        let message = manager.messages.pop().unwrap();
+                                        match message {
+                                            mesage::Message::Error(msg) => {
+                                                println!("{}", msg);
+                                                err = Some(msg);
+                                            }
+                                            _ => {}
                                         }
-                                        _ => {}
                                     }
                                 }
                             }
                         }
                     }
-
                     if let Some(err) = err {
                         error(&info, &err);
                         return;
@@ -264,7 +265,6 @@ impl TModule for ModuleMuzzManTransport {
 
                     println!("DDD");
                 }
-
                 storage.set(manager);
                 storage.set(Vec::<u128>::new());
 
