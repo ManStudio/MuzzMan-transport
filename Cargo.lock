@@ -324,9 +324,9 @@ dependencies = [
 
 [[package]]
 name = "relay-man"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18f0d15212329f656ac0d099aec7b7f546aceb3bd150c9353c38ad808191a80f"
+checksum = "735e59451a6b45555ca0c685a551fbcf8d6d14e9fedd3df5f0e2137a9c37895c"
 dependencies = [
  "bytes-kman",
  "igd",
