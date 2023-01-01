@@ -249,7 +249,6 @@ impl TModule for ModuleMuzzManTransport {
                                         mesage::Message::Error(msg) => {
                                             println!("{}", msg);
                                             err = Some(msg);
-                                            return;
                                         }
                                         _ => {}
                                     }
@@ -260,6 +259,7 @@ impl TModule for ModuleMuzzManTransport {
 
                     if let Some(err) = err {
                         error(&info, &err);
+                        return;
                     }
 
                     println!("DDD");
