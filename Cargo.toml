@@ -19,7 +19,7 @@ codegen-units = 128
 crate-type = ["cdylib"]
 
 [dependencies]
-muzzman-lib= "0.1.0" 
+muzzman-lib= "0.1.1" 
 bytes-kman = {version = "0.1.7"}
 socket2 = "0.4.7"
 relay-man = "0.2.2"

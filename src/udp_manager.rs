@@ -167,7 +167,7 @@ impl UdpManager {
         let Some(addr) = addr.next() else {return Err(())};
 
         let sock_addr = addr.into();
-        let conn = match req.connect(Duration::from_secs(10), Duration::from_secs(1), false) {
+        let conn = match req.connect(Duration::from_secs(10), Duration::from_millis(500), false) {
             Ok(e) => e,
             Err(s) => {
                 match s {
@@ -307,8 +307,8 @@ impl UdpManager {
                                 let sock_addr = addr.into();
 
                                 let Ok(socket) = req.connect(
-                                    Duration::from_secs(2),
-                                    Duration::from_secs(1),
+                                    Duration::from_secs(10),
+                                    Duration::from_millis(500),
                                     true,
                                 ) else{
                                     println!("Cannot connect");

@@ -1,3 +1,5 @@
+use std::{path::PathBuf, str::FromStr};
+
 use muzzman_lib::prelude::*;
 use udp_manager::{Should, UdpManager};
 
@@ -10,8 +12,127 @@ mod udp_manager;
 #[module_link]
 pub struct ModuleMuzzManTransport;
 
+pub fn action_share(info: MInfo, args: Vec<Type>) {
+    let Some(path) = args.get(0)else{return};
+    let Ok(path) = path.clone().try_into() else {return};
+    let Some(should_enable) = args.get(1)else{return};
+    let Ok(should_enable) = should_enable.clone().try_into() else{return};
+
+    let path: String = path;
+    let should_enable: bool = should_enable;
+
+    let mut filename = None;
+    #[cfg(any(target_os = "unix", target_os = "linux", target_os = "android"))]
+    {
+        filename = path.split('/').last()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        filename = path.split('\\').last()
+    }
+
+    let Some(filename) = filename else{return};
+
+    let Ok(session) = info.get_session() else {return};
+    let Ok(location) = session.get_default_location() else {return};
+    let Ok(element) = session.create_element(filename, &location) else{return};
+    let _ = element.set_module(Some(info));
+    let _ = element.init();
+    let Ok(path) = PathBuf::from_str(&path) else {return};
+    let _ = element.set_data(FileOrData::File(path, None));
+    let _ = element.set_enabled(should_enable, None);
+}
+
+pub fn action_recive(info: MInfo, args: Vec<Type>) {
+    let Some(url) = args.get(0) else{return};
+    let Ok(url) = url.clone().try_into() else {return};
+    let url: String = url;
+
+    let Some(should_enable) = args.get(1) else{return};
+    let Ok(should_enable) = should_enable.clone().try_into() else {return};
+    let should_enable: bool = should_enable;
+
+    let mut filename = None;
+    #[cfg(any(target_os = "unix", target_os = "linux", target_os = "android"))]
+    {
+        filename = url.split('/').last()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        filename = url.split('\\').last()
+    }
+
+    let Some(filename) = filename else{return};
+
+    let Ok(session) = info.get_session() else {return};
+    let Ok(location) = session.get_default_location() else {return};
+    let Ok(element) = session.create_element(&filename, &location) else {return};
+    let _ = element.set_module(Some(info));
+    let _ = element.init();
+
+    {
+        let  Ok(mut data) = element.get_element_data() else {return};
+        data.set("url", url.into());
+        let _ = element.set_element_data(data);
+    }
+
+    let _ = element.set_enabled(should_enable, None);
+}
+
 impl TModule for ModuleMuzzManTransport {
     fn init(&self, info: MInfo) -> Result<(), String> {
+        let _ = info.register_action(
+            "share".into(),
+            vec![
+                (
+                    String::from("path"),
+                    Value::new(
+                        Type::None,
+                        vec![TypeTag::String],
+                        vec![],
+                        true,
+                        "The filepath that will be shared",
+                    ),
+                ),
+                (
+                    String::from("auto_start"),
+                    Value::new(
+                        Type::Bool(true),
+                        vec![TypeTag::Bool],
+                        vec![],
+                        true,
+                        "If should auto enable",
+                    ),
+                ),
+            ],
+            action_share,
+        );
+        let _ = info.register_action(
+            "recive".into(),
+            vec![
+                (
+                    String::from("url"),
+                    Value::new(
+                        Type::None,
+                        vec![TypeTag::String],
+                        vec![],
+                        true,
+                        "The mzt url for reciving",
+                    ),
+                ),
+                (
+                    String::from("auto_start"),
+                    Value::new(
+                        Type::Bool(true),
+                        vec![TypeTag::Bool],
+                        vec![],
+                        true,
+                        "If should auto enable",
+                    ),
+                ),
+            ],
+            action_recive,
+        );
         Ok(())
     }
 

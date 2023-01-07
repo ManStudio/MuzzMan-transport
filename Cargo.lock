@@ -196,9 +196,9 @@ dependencies = [
 
 [[package]]
 name = "muzzman-lib"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4be11b1188321b125cca821983fa4b22fb0aece4a16ca363465ddf5b67253bc"
+checksum = "b701a00ebec549e1ff286aeff22208d531a1b5ec2dce8864b90df10fd42d9001"
 dependencies = [
  "get_ref",
  "http",
