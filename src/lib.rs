@@ -12,7 +12,7 @@ mod udp_manager;
 #[module_link]
 pub struct ModuleMuzzManTransport;
 
-pub fn action_share(info: MInfo, args: Vec<Type>) {
+pub fn action_share(info: MRef, args: Vec<Type>) {
     let Some(path) = args.get(0)else{return};
     let Ok(path) = path.clone().try_into() else {return};
     let Some(should_enable) = args.get(1)else{return};
@@ -43,7 +43,7 @@ pub fn action_share(info: MInfo, args: Vec<Type>) {
     let _ = element.set_enabled(should_enable, None);
 }
 
-pub fn action_recive(info: MInfo, args: Vec<Type>) {
+pub fn action_recive(info: MRef, args: Vec<Type>) {
     let Some(url) = args.get(0) else{return};
     let Ok(url) = url.clone().try_into() else {return};
     let url: String = url;
@@ -80,7 +80,7 @@ pub fn action_recive(info: MInfo, args: Vec<Type>) {
 }
 
 impl TModule for ModuleMuzzManTransport {
-    fn init(&self, info: MInfo) -> Result<(), String> {
+    fn init(&self, info: MRef) -> Result<(), String> {
         let _ = info.register_action(
             "share".into(),
             vec![
@@ -205,7 +205,7 @@ impl TModule for ModuleMuzzManTransport {
             ),
         );
 
-        let mut should = CustomEnum::new();
+        let mut should = CustomEnum::default();
         should.add("Send");
         should.add("Recv");
         should.add("Sync");
@@ -540,14 +540,21 @@ impl TModule for ModuleMuzzManTransport {
         false
     }
 
-    fn init_location(&self, location: LInfo, data: FileOrData) {}
+    fn init_location(&self, location: LRef, data: FileOrData) {}
 
     fn c(&self) -> Box<dyn TModule> {
         Box::new(ModuleMuzzManTransport)
     }
+
+    fn step_location(&self, location: LRow, control_flow: &mut ControlFlow, storage: &mut Storage) {
+    }
+
+    fn notify(&self, info: Ref, event: Event) {
+        println!("Notify: {:?} {:?}", info, event)
+    }
 }
 
-pub fn error(element: &EInfo, error: impl Into<String>) {
+pub fn error(element: &ERef, error: impl Into<String>) {
     let mut statuses = element.get_statuses().unwrap();
     statuses[5] = error.into();
     element.set_statuses(statuses).unwrap();

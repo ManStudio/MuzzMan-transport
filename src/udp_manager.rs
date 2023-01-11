@@ -36,7 +36,7 @@ pub struct UdpManager {
     secret: String,
     should: Should,
     buffer_size: usize,
-    info: EInfo,
+    info: ERef,
     pub messages: Vec<Message>,
     name: String,
     connecting: Option<JoinHandle<Result<Connection, ConnectingError>>>,
@@ -60,7 +60,7 @@ impl UdpManager {
         secret: String,
         relays: Vec<String>,
         name: String,
-        info: EInfo,
+        info: ERef,
     ) -> Result<Self, String> {
         let relay = RelayClient::new(
             ConnectionInfo {
