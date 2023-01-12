@@ -21,7 +21,7 @@ pub fn action_share(info: MRef, args: Vec<Type>) {
     let path: String = path;
     let should_enable: bool = should_enable;
 
-    let mut filename = None;
+    let filename;
     #[cfg(any(target_os = "unix", target_os = "linux", target_os = "android"))]
     {
         filename = path.split('/').last()
@@ -52,7 +52,7 @@ pub fn action_recive(info: MRef, args: Vec<Type>) {
     let Ok(should_enable) = should_enable.clone().try_into() else {return};
     let should_enable: bool = should_enable;
 
-    let mut filename = None;
+    let filename;
     #[cfg(any(target_os = "unix", target_os = "linux", target_os = "android"))]
     {
         filename = url.split('/').last()
@@ -66,7 +66,7 @@ pub fn action_recive(info: MRef, args: Vec<Type>) {
 
     let Ok(session) = info.get_session() else {return};
     let Ok(location) = session.get_default_location() else {return};
-    let Ok(element) = session.create_element(&filename, &location) else {return};
+    let Ok(element) = session.create_element(filename, &location) else {return};
     let _ = element.set_module(Some(info));
     let _ = element.init();
 
@@ -251,6 +251,7 @@ impl TModule for ModuleMuzzManTransport {
     fn step_element(&self, element: ERow, control_flow: &mut ControlFlow, storage: &mut Storage) {
         let status = element.read().unwrap().status;
         let info = element.read().unwrap().info.clone();
+        let mut logger = element.get_logger(None);
 
         match status {
             0 => {
@@ -325,7 +326,9 @@ impl TModule for ModuleMuzzManTransport {
                         }
                     }
 
-                    if relays.len() == 0 {
+                    logger.info(format!("Relays: {:?}", relays));
+
+                    if relays.is_empty() {
                         error(&info, "module_data has no relays");
                         return;
                     }
@@ -358,33 +361,24 @@ impl TModule for ModuleMuzzManTransport {
                 {
                     let mut err = None;
                     {
-                        println!("STart");
                         let element = element.read().unwrap();
-                        if let Some(data) = element.element_data.get("url") {
-                            if let Type::String(url) = data {
-                                if manager.send_request(url.clone()).is_err() {
-                                    println!("Had an error");
-                                    manager.messages.reverse();
-                                    while manager.messages.len() > 0 {
-                                        let message = manager.messages.pop().unwrap();
-                                        match message {
-                                            mesage::Message::Error(msg) => {
-                                                println!("{}", msg);
-                                                err = Some(msg);
-                                            }
-                                            _ => {}
-                                        }
+                        if let Some(Type::String(url)) = element.element_data.get("url") {
+                            if manager.send_request(url.clone()).is_err() {
+                                manager.messages.reverse();
+                                while !manager.messages.is_empty() {
+                                    let message = manager.messages.pop().unwrap();
+                                    if let mesage::Message::Error(msg) = message {
+                                        logger.error(msg.clone());
+                                        err = Some(msg);
                                     }
                                 }
                             }
                         }
                     }
                     if let Some(err) = err {
-                        error(&info, &err);
+                        error(&info, err);
                         return;
                     }
-
-                    println!("DDD");
                 }
                 storage.set(manager);
                 storage.set(Vec::<u128>::new());
@@ -398,7 +392,7 @@ impl TModule for ModuleMuzzManTransport {
                 manager.step();
 
                 manager.messages.reverse();
-                while manager.messages.len() > 0 {
+                while !manager.messages.is_empty() {
                     let message = manager.messages.pop().unwrap();
                     match message {
                         mesage::Message::New(name, session, conn) => {
@@ -437,11 +431,9 @@ impl TModule for ModuleMuzzManTransport {
 
                             for element in elements {
                                 let data = element.get_element_data().unwrap();
-                                if let Some(data) = data.get("session") {
-                                    if let Type::U128(s) = data {
-                                        if *s == session {
-                                            element.set_progress(progress).unwrap();
-                                        }
+                                if let Some(Type::U128(s)) = data.get("session") {
+                                    if *s == session {
+                                        element.set_progress(progress).unwrap();
                                     }
                                 }
                             }
@@ -453,12 +445,10 @@ impl TModule for ModuleMuzzManTransport {
 
                             for element in elements {
                                 let data = element.get_element_data().unwrap();
-                                if let Some(data) = data.get("session") {
-                                    if let Type::U128(s) = data {
-                                        if *s == session {
-                                            let _ = element.set_status(0);
-                                            let _ = element.set_statuses(vec![status.clone()]);
-                                        }
+                                if let Some(Type::U128(s)) = data.get("session") {
+                                    if *s == session {
+                                        let _ = element.set_status(0);
+                                        let _ = element.set_statuses(vec![status.clone()]);
                                     }
                                 }
                             }
@@ -472,11 +462,9 @@ impl TModule for ModuleMuzzManTransport {
 
                             for element in elements {
                                 let data = element.get_element_data().unwrap();
-                                if let Some(data) = data.get("session") {
-                                    if let Type::U128(s) = data {
-                                        if *s == session {
-                                            finded = Some(element.clone())
-                                        }
+                                if let Some(Type::U128(s)) = data.get("session") {
+                                    if *s == session {
+                                        finded = Some(element.clone())
                                     }
                                 }
                             }
@@ -502,11 +490,9 @@ impl TModule for ModuleMuzzManTransport {
 
                             for element in elements {
                                 let data = element.get_element_data().unwrap();
-                                if let Some(data) = data.get("session") {
-                                    if let Type::U128(s) = data {
-                                        if sessions.contains(s) {
-                                            finded.push(element.clone())
-                                        }
+                                if let Some(Type::U128(s)) = data.get("session") {
+                                    if sessions.contains(s) {
+                                        finded.push(element.clone())
                                     }
                                 }
                             }
@@ -532,21 +518,32 @@ impl TModule for ModuleMuzzManTransport {
         }
     }
 
-    fn accept_extension(&self, filename: &str) -> bool {
+    fn accept_extension(&self, _filename: &str) -> bool {
+        // to do form mzt files
         false
     }
 
-    fn accept_url(&self, uri: Url) -> bool {
+    fn accept_url(&self, url: Url) -> bool {
+        if let Some(protocol) = url.to_string().split(':').next() {
+            if protocol == "mzt" {
+                return true;
+            }
+        }
         false
     }
 
-    fn init_location(&self, location: LRef, data: FileOrData) {}
+    fn init_location(&self, _location: LRef, _data: FileOrData) {}
 
     fn c(&self) -> Box<dyn TModule> {
         Box::new(ModuleMuzzManTransport)
     }
 
-    fn step_location(&self, location: LRow, control_flow: &mut ControlFlow, storage: &mut Storage) {
+    fn step_location(
+        &self,
+        _location: LRow,
+        _control_flow: &mut ControlFlow,
+        _storage: &mut Storage,
+    ) {
     }
 
     fn notify(&self, info: Ref, event: Event) {

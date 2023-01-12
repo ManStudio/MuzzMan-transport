@@ -2,6 +2,7 @@ use std::time::SystemTime;
 
 use crate::packets::Packet;
 
+#[derive(Debug)]
 pub struct PakStorage {
     pub packets: Vec<(Packet, SystemTime)>,
     pub counter: u16,

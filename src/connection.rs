@@ -9,6 +9,7 @@ use crate::{
     pak_storage::PakStorage,
 };
 
+#[derive(Debug)]
 pub struct Connection {
     pub name: String,
     pub conn: Conn,
