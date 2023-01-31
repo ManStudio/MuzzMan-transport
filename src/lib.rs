@@ -35,8 +35,8 @@ pub fn action_share(info: MRef, args: Vec<Type>) {
 
     let Ok(session) = info.get_session() else {return};
     let Ok(location) = session.get_default_location() else {return};
-    let Ok(element) = session.create_element(filename, &location) else{return};
-    let _ = element.set_module(Some(info));
+    let Ok(element) = session.create_element(filename, &location.id()) else{return};
+    let _ = element.set_module(Some(info.id()));
     let _ = element.init();
     let Ok(path) = PathBuf::from_str(&path) else {return};
     let _ = element.set_data(FileOrData::File(path, None));
@@ -66,17 +66,12 @@ pub fn action_recive(info: MRef, args: Vec<Type>) {
 
     let Ok(session) = info.get_session() else {return};
     let Ok(location) = session.get_default_location() else {return};
-    let Ok(element) = session.create_element(filename, &location) else {return};
-    let _ = element.set_module(Some(info));
-    let _ = element.init();
+    let Ok(element) = session.create_element(filename, &location.id()) else {return};
+    element.set_module(Some(info.id())).unwrap();
+    element.set_url(Some(url)).unwrap();
+    element.init().unwrap();
 
-    {
-        let  Ok(mut data) = element.get_element_data() else {return};
-        data.set("url", url.into());
-        let _ = element.set_element_data(data);
-    }
-
-    let _ = element.set_enabled(should_enable, None);
+    element.set_enabled(should_enable, None).unwrap();
 }
 
 impl TModule for ModuleMuzzManTransport {
@@ -252,6 +247,12 @@ impl TModule for ModuleMuzzManTransport {
         let status = element.read().unwrap().status;
         let info = element.read().unwrap().info.clone();
         let mut logger = element.get_logger(None);
+        let s = if let Some(session) = &info.read().unwrap().session {
+            session.c()
+        } else {
+            error(&info, "Element Ref has in session");
+            return;
+        };
 
         match status {
             0 => {
@@ -362,7 +363,7 @@ impl TModule for ModuleMuzzManTransport {
                     let mut err = None;
                     {
                         let element = element.read().unwrap();
-                        if let Some(Type::String(url)) = element.element_data.get("url") {
+                        if let Some(url) = element.url.clone() {
                             if manager.send_request(url.clone()).is_err() {
                                 manager.messages.reverse();
                                 while !manager.messages.is_empty() {
@@ -396,7 +397,8 @@ impl TModule for ModuleMuzzManTransport {
                     let message = manager.messages.pop().unwrap();
                     match message {
                         mesage::Message::New(name, session, conn) => {
-                            let location_info = info.read().unwrap().location.clone();
+                            let id = info.read().unwrap().id.location_id.clone();
+                            let location_info = s.get_location_ref(&id).unwrap();
                             let element = location_info.create_element(&name).unwrap();
                             let mut data = element.get_element_data().unwrap();
 
@@ -425,7 +427,8 @@ impl TModule for ModuleMuzzManTransport {
                             sessions.push(session);
                         }
                         mesage::Message::SetProgress(session, progress) => {
-                            let location_info = info.read().unwrap().location.clone();
+                            let id = info.read().unwrap().id.location_id.clone();
+                            let location_info = s.get_location_ref(&id).unwrap();
                             let len = location_info.get_elements_len().unwrap();
                             let elements = location_info.get_elements(0..len).unwrap();
 
@@ -439,7 +442,8 @@ impl TModule for ModuleMuzzManTransport {
                             }
                         }
                         mesage::Message::SetStatus(session, status) => {
-                            let location_info = info.read().unwrap().location.clone();
+                            let id = info.read().unwrap().id.location_id.clone();
+                            let location_info = s.get_location_ref(&id).unwrap();
                             let len = location_info.get_elements_len().unwrap();
                             let elements = location_info.get_elements(0..len).unwrap();
 
@@ -454,7 +458,8 @@ impl TModule for ModuleMuzzManTransport {
                             }
                         }
                         mesage::Message::Destroy(session) => {
-                            let location_info = info.read().unwrap().location.clone();
+                            let id = info.read().unwrap().id.location_id.clone();
+                            let location_info = s.get_location_ref(&id).unwrap();
                             let len = location_info.get_elements_len().unwrap();
                             let elements = location_info.get_elements(0..len).unwrap();
 
@@ -482,7 +487,8 @@ impl TModule for ModuleMuzzManTransport {
                             }
                         }
                         mesage::Message::Error(msg) => {
-                            let location_info = info.read().unwrap().location.clone();
+                            let id = info.read().unwrap().id.location_id.clone();
+                            let location_info = s.get_location_ref(&id).unwrap();
                             let len = location_info.get_elements_len().unwrap();
                             let elements = location_info.get_elements(0..len).unwrap();
 
@@ -523,8 +529,8 @@ impl TModule for ModuleMuzzManTransport {
         false
     }
 
-    fn accept_url(&self, url: Url) -> bool {
-        if let Some(protocol) = url.to_string().split(':').next() {
+    fn accept_url(&self, url: String) -> bool {
+        if let Some(protocol) = url.split(':').next() {
             if protocol == "mzt" {
                 return true;
             }
@@ -532,11 +538,11 @@ impl TModule for ModuleMuzzManTransport {
         false
     }
 
-    fn init_location(&self, _location: LRef, _data: FileOrData) {}
-
-    fn c(&self) -> Box<dyn TModule> {
-        Box::new(ModuleMuzzManTransport)
+    fn accepted_protocols(&self) -> Vec<String> {
+        vec!["mzt".into()]
     }
+
+    fn init_location(&self, _location: LRef, _data: FileOrData) {}
 
     fn step_location(
         &self,
@@ -546,8 +552,10 @@ impl TModule for ModuleMuzzManTransport {
     ) {
     }
 
-    fn notify(&self, info: Ref, event: Event) {
-        println!("Notify: {:?} {:?}", info, event)
+    fn notify(&self, info: Ref, event: Event) {}
+
+    fn c(&self) -> Box<dyn TModule> {
+        Box::new(ModuleMuzzManTransport)
     }
 }
 
